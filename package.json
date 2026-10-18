@@ -1,0 +1,15 @@
+{
+  "name": "ritm-music-player",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Ritm - a simple music player for the songs on your phone",
+  "dependencies": {
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/app": "^6.0.2",
+    "@capacitor/core": "^6.2.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.0"
+  },
+  "license": "GPL-3.0-only"
+}

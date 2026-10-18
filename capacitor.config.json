@@ -1,0 +1,9 @@
+{
+  "appId": "com.ritm.app",
+  "appName": "Ritm",
+  "webDir": "www",
+  "backgroundColor": "#0e0b15",
+  "android": {
+    "backgroundColor": "#0e0b15"
+  }
+}
