@@ -7,9 +7,10 @@ A simple music player for the songs on your phone. Pick your files once, then co
 ## Features
 - Plays the music files from your phone, with playlists
 - **Notification** with cover, title and Previous / Play-Pause / Next / Stop, also on the lock screen
-- **Floating bubble** over other apps: title, controls, volume and play mode, draggable and snapping to the edge
+- **Floating bubble** over other apps: song, playlist and position (for example 2/30), Previous / Play-Pause / Next and volume; draggable and snapping to the edge
 - Play modes: Loop, Shuffle, Repeat 1, In order
 - Sleep timer
+- Keeps playing while you watch a video or use another app (a phone call still stops it)
 - Keeps playing with the screen off (use the **Allow background playback** button in Settings; on some phones also set the battery to "No restrictions")
 
 ## Get the APK

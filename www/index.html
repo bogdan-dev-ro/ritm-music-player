@@ -662,6 +662,25 @@ if('mediaSession' in navigator){
   h('seekforward',()=>{au.currentTime=Math.min(au.duration||0,au.currentTime+10);});
 }
 au.addEventListener('ended',()=>advance(true));
+/* Keep playing when another app (a video, for example) takes the audio:
+   only the app's own pause calls count as a real pause. A call still stops the music. */
+let userPause=false,resumeTries=0,resumeAt=0;
+const rawPause=au.pause.bind(au);
+au.pause=function(){if(!au.paused)userPause=true;return rawPause();};
+au.addEventListener('play',()=>{resumeTries=0;});
+au.addEventListener('pause',()=>{
+  if(userPause){userPause=false;return;}
+  if(au.ended||!P.cur||!au.getAttribute('src'))return;
+  if(Date.now()-resumeAt>20000)resumeTries=0;
+  if(resumeTries>=6)return;
+  resumeTries++;resumeAt=Date.now();
+  setTimeout(async()=>{
+    if(!au.paused||userPause)return;
+    let inCall=false;
+    try{if(Ritm)inCall=!!(await Ritm.callActive()).active;}catch(e){}
+    if(!inCall)au.play().catch(()=>{});
+  },400);
+});
 au.addEventListener('play',updateAll);au.addEventListener('pause',updateAll);
 au.addEventListener('timeupdate',updateTime);
 au.addEventListener('seeked',()=>syncNative(true));
@@ -678,15 +697,21 @@ document.addEventListener('visibilitychange',()=>{
 const phoneCfg=()=>{const m=S.settings.phone;return{notification:m==='notification'||m==='both',bubble:m==='bubble'||m==='both'};};
 const syncNativeCfg=()=>{if(Ritm)callNative(()=>Ritm.configure(phoneCfg()));};
 let lastNativeKey='';
+function queuePos(){
+  const ids=ctxIds();
+  if(!P.cur||!ids.length)return{index:0,count:ids.length};
+  const i=P.mode==='shuffle'?ids.length-P.bag.filter(x=>ids.includes(x)).length:ids.indexOf(P.cur)+1;
+  return{index:Math.max(1,Math.min(i||1,ids.length)),count:ids.length};
+}
 function syncNative(force){
   if(!Ritm)return;
   const s=S.songs.get(P.cur),playing=!au.paused&&!!s;
   const payload={
     has:!!s,title:s?s.name:'',subtitle:s?ctxName():'',playing,mode:P.mode,
     duration:Math.round((au.duration||(s&&s.dur)||0)*1000),position:Math.round((au.currentTime||0)*1000),
-    hue:s?artOf(s.name).h:305,letter:s?letterOf(s.name):'♪'
+    hue:s?artOf(s.name).h:305,letter:s?letterOf(s.name):'♪',...queuePos()
   };
-  const key=[payload.has,payload.title,payload.subtitle,payload.playing,payload.mode,payload.hue].join('|');
+  const key=[payload.has,payload.title,payload.subtitle,payload.playing,payload.mode,payload.hue,payload.index,payload.count].join('|');
   if(!force&&key===lastNativeKey)return;
   lastNativeKey=key;
   callNative(()=>Ritm.update(payload));

@@ -12,6 +12,8 @@ final class RitmState {
     static volatile String letter = "\u266A";
     static volatile long duration = 0;         // ms
     static volatile long position = 0;         // ms
+    static volatile int index = 0;             // position of the song in the list (1-based)
+    static volatile int count = 0;             // songs in the list
     static volatile float hue = 305f;
 
     private RitmState() {}

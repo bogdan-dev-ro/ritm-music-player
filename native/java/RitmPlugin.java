@@ -9,7 +9,9 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.media.AudioManager;
 import android.provider.Settings;
+import android.webkit.WebView;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -30,13 +32,43 @@ public class RitmPlugin extends Plugin {
     }
 
     /** Sends an action (play, pause, next, prev, stop, seek, mode, hideBubble, sleep) to the web app. */
-    static void emit(String action, double value) {
-        RitmPlugin p = instance;
+    static void emit(final String action, final double value) {
+        final RitmPlugin p = instance;
         if (p == null) return;
+        p.handler.post(new Runnable() {
+            @Override
+            public void run() {
+                // wake the web page first: after a pause in the background it may be frozen
+                try {
+                    WebView w = p.getBridge().getWebView();
+                    if (w != null) {
+                        w.onResume();
+                        w.resumeTimers();
+                    }
+                } catch (Exception ignored) {
+                }
+                JSObject o = new JSObject();
+                o.put("action", action);
+                o.put("value", value);
+                p.notifyListeners("action", o);
+            }
+        });
+    }
+
+    /** True while a phone or VoIP call is ringing or active (the music must not restart then). */
+    @PluginMethod
+    public void callActive(PluginCall call) {
+        boolean active = false;
+        try {
+            AudioManager am = (AudioManager) getContext().getSystemService(Context.AUDIO_SERVICE);
+            int m = am.getMode();
+            active = m == AudioManager.MODE_IN_CALL || m == AudioManager.MODE_RINGTONE
+                    || m == AudioManager.MODE_IN_COMMUNICATION;
+        } catch (Exception ignored) {
+        }
         JSObject o = new JSObject();
-        o.put("action", action);
-        o.put("value", value);
-        p.notifyListeners("action", o);
+        o.put("active", active);
+        call.resolve(o);
     }
 
     @PluginMethod
@@ -61,6 +93,10 @@ public class RitmPlugin extends Plugin {
         RitmState.duration = d == null ? 0L : d.longValue();
         RitmState.position = p == null ? 0L : p.longValue();
         RitmState.hue = h == null ? 305f : h.floatValue();
+        Integer ix = call.getInt("index", 0);
+        Integer ct = call.getInt("count", 0);
+        RitmState.index = ix == null ? 0 : ix;
+        RitmState.count = ct == null ? 0 : ct;
         PlayerService.refresh(getContext());
         call.resolve();
     }

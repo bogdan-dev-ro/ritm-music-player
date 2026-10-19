@@ -12,6 +12,8 @@ import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.LinearGradient;
+import android.graphics.RectF;
 import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.RadialGradient;
@@ -26,6 +28,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.text.TextUtils;
@@ -73,7 +76,9 @@ public class PlayerService extends Service {
     private ImageView bubbleView;
     private ImageView pPlay;
     private LinearLayout panel;
-    private TextView pTitle, pSub, pMode;
+    private static final int PANEL_W = 268;
+    private TextView pTitle, pSub, pCount;
+    private EqView pEq;
     private SeekBar pVol;
     private boolean expanded = false;
 
@@ -181,7 +186,7 @@ public class PlayerService extends Service {
         updateArt();
         updateSession();
         Notification n = buildNotification();
-        boolean wantFg = RitmState.playing || RitmState.bubble;
+        boolean wantFg = RitmState.playing || RitmState.bubble || (RitmState.has && RitmState.notif);
         if (wantFg) {
             startFg(n);
         } else {
@@ -456,10 +461,10 @@ public class PlayerService extends Service {
         return g;
     }
 
-    private ImageView ibtn(int sizeDp, int padDp, int resId) {
+    private ImageView ibtn(int sizeDp, int padDp, int resId, int marginDp) {
         ImageView v = new ImageView(this);
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp));
-        p.setMargins(dp(6), 0, dp(6), 0);
+        p.setMargins(dp(marginDp), 0, dp(marginDp), 0);
         v.setLayoutParams(p);
         v.setPadding(dp(padDp), dp(padDp), dp(padDp), dp(padDp));
         v.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -485,9 +490,9 @@ public class PlayerService extends Service {
 
         // collapsed: the round music-note bubble
         bubbleView = new ImageView(this);
-        bubbleView.setLayoutParams(new FrameLayout.LayoutParams(dp(56), dp(56)));
+        bubbleView.setLayoutParams(new FrameLayout.LayoutParams(dp(52), dp(52)));
         bubbleView.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        bubbleView.setPadding(dp(15), dp(15), dp(15), dp(15));
+        bubbleView.setPadding(dp(14), dp(14), dp(14), dp(14));
         int note = res("ic_note");
         if (note != 0) bubbleView.setImageResource(note);
         bubbleView.setColorFilter(0xFF1B0F22);
@@ -499,93 +504,103 @@ public class PlayerService extends Service {
         }));
         root.addView(bubbleView);
 
-        // expanded: the small control rectangle
+        // expanded: the control panel
         panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setLayoutParams(new FrameLayout.LayoutParams(dp(300), FrameLayout.LayoutParams.WRAP_CONTENT));
-        panel.setPadding(dp(16), dp(10), dp(16), dp(14));
-        GradientDrawable pbg = rounded(0xF4171021, 28);
+        panel.setLayoutParams(new FrameLayout.LayoutParams(dp(PANEL_W), FrameLayout.LayoutParams.WRAP_CONTENT));
+        panel.setPadding(dp(16), dp(12), dp(12), dp(14));
+        GradientDrawable pbg = rounded(0xF4171021, 26);
         pbg.setStroke(dp(1), 0x33FFFFFF);
         panel.setBackground(pbg);
         panel.setVisibility(View.GONE);
 
+        // header: moving-bars square, song title, playlist name, counter, close
         LinearLayout head = new LinearLayout(this);
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
         head.setOnTouchListener(makeDrag(null));
+        pEq = new EqView(this);
+        LinearLayout.LayoutParams eqLp = new LinearLayout.LayoutParams(dp(42), dp(42));
+        eqLp.rightMargin = dp(12);
+        pEq.setLayoutParams(eqLp);
         LinearLayout titles = new LinearLayout(this);
         titles.setOrientation(LinearLayout.VERTICAL);
         titles.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        pTitle = text(16, 0xFFFFFFFF, true);
+        pTitle = text(15, 0xFFFFFFFF, true);
+        LinearLayout subRow = new LinearLayout(this);
+        subRow.setOrientation(LinearLayout.HORIZONTAL);
+        subRow.setGravity(Gravity.CENTER_VERTICAL);
+        subRow.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         pSub = text(12, 0xFFA79FBA, false);
+        pSub.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        pCount = text(11, 0xFFFFFFFF, true);
+        pCount.setPadding(dp(8), dp(2), dp(8), dp(2));
+        pCount.setBackground(rounded(0x22FFFFFF, 10));
+        LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        cLp.leftMargin = dp(8);
+        pCount.setLayoutParams(cLp);
+        subRow.addView(pSub);
+        subRow.addView(pCount);
         titles.addView(pTitle);
-        titles.addView(pSub);
-        TextView close = text(18, 0xFFFFFFFF, false);
-        close.setText("\u2715");
-        close.setGravity(Gravity.CENTER);
-        close.setLayoutParams(new LinearLayout.LayoutParams(dp(40), dp(40)));
+        titles.addView(subRow);
+        CloseView close = new CloseView(this);
+        LinearLayout.LayoutParams clLp = new LinearLayout.LayoutParams(dp(34), dp(34));
+        clLp.leftMargin = dp(4);
+        close.setLayoutParams(clLp);
         close.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 collapse();
             }
         });
+        head.addView(pEq);
         head.addView(titles);
         head.addView(close);
         panel.addView(head);
 
+        // controls: previous, play / pause, next
         LinearLayout ctl = new LinearLayout(this);
         ctl.setOrientation(LinearLayout.HORIZONTAL);
         ctl.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams ctlLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        ctlLp.topMargin = dp(8);
+        ctlLp.topMargin = dp(12);
         ctl.setLayoutParams(ctlLp);
-
-        ImageView prev = ibtn(48, 12, android.R.drawable.ic_media_previous);
+        ImageView prev = ibtn(44, 10, android.R.drawable.ic_media_previous, 16);
         prev.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 RitmPlugin.emit("prev", 0);
             }
         });
-        pPlay = ibtn(60, 14, android.R.drawable.ic_media_play);
+        pPlay = ibtn(58, 15, android.R.drawable.ic_media_play, 16);
         pPlay.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 RitmPlugin.emit(RitmState.playing ? "pause" : "play", 0);
             }
         });
-        ImageView next = ibtn(48, 12, android.R.drawable.ic_media_next);
+        ImageView next = ibtn(44, 10, android.R.drawable.ic_media_next, 16);
         next.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 RitmPlugin.emit("next", 0);
             }
         });
-        ImageView stop = ibtn(48, 0, 0);
-        GradientDrawable sq = rounded(0xFFFFFFFF, 3);
-        sq.setSize(dp(14), dp(14));
-        stop.setImageDrawable(sq);
-        stop.setScaleType(ImageView.ScaleType.CENTER);
-        stop.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                RitmPlugin.emit("stop", 0);
-            }
-        });
         ctl.addView(prev);
         ctl.addView(pPlay);
         ctl.addView(next);
-        ctl.addView(stop);
         panel.addView(ctl);
 
+        // volume
         LinearLayout volRow = new LinearLayout(this);
         volRow.setOrientation(LinearLayout.HORIZONTAL);
         volRow.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams volLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        volLp.topMargin = dp(8);
+        volLp.topMargin = dp(10);
         volRow.setLayoutParams(volLp);
         TextView vl = text(12, 0xFFA79FBA, false);
         vl.setText("Volume");
@@ -610,38 +625,6 @@ public class PlayerService extends Service {
         volRow.addView(vl);
         volRow.addView(pVol);
         panel.addView(volRow);
-
-        LinearLayout foot = new LinearLayout(this);
-        foot.setOrientation(LinearLayout.HORIZONTAL);
-        foot.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams footLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        footLp.topMargin = dp(6);
-        foot.setLayoutParams(footLp);
-        pMode = text(12.5f, 0xFFFFFFFF, true);
-        pMode.setPadding(dp(14), dp(8), dp(14), dp(8));
-        pMode.setBackground(rounded(0x22FFFFFF, 20));
-        pMode.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                RitmPlugin.emit("mode", 0);
-            }
-        });
-        View spacer = new View(this);
-        spacer.setLayoutParams(new LinearLayout.LayoutParams(0, 1, 1f));
-        TextView hide = text(12.5f, 0xFFA79FBA, false);
-        hide.setText("Hide bubble");
-        hide.setPadding(dp(10), dp(8), dp(4), dp(8));
-        hide.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                RitmPlugin.emit("hideBubble", 0);
-            }
-        });
-        foot.addView(pMode);
-        foot.addView(spacer);
-        foot.addView(hide);
-        panel.addView(foot);
 
         root.addView(panel);
     }
@@ -693,7 +676,7 @@ public class PlayerService extends Service {
     private void snap() {
         if (root == null) return;
         DisplayMetrics dm = getResources().getDisplayMetrics();
-        int bw = dp(56);
+        int bw = dp(52);
         lp.x = (lp.x + bw / 2 < dm.widthPixels / 2) ? dp(4) : dm.widthPixels - bw - dp(4);
         lp.y = Math.max(dp(40), Math.min(lp.y, dm.heightPixels - dp(160)));
         try {
@@ -708,7 +691,7 @@ public class PlayerService extends Service {
         bubbleView.setVisibility(View.GONE);
         panel.setVisibility(View.VISIBLE);
         int w = getResources().getDisplayMetrics().widthPixels;
-        lp.x = Math.max(dp(8), Math.min(lp.x, w - dp(300) - dp(8)));
+        lp.x = Math.max(dp(8), Math.min(lp.x, w - dp(PANEL_W) - dp(8)));
         pVol.setProgress(audio.getStreamVolume(AudioManager.STREAM_MUSIC));
         try {
             wm.updateViewLayout(root, lp);
@@ -722,15 +705,6 @@ public class PlayerService extends Service {
         panel.setVisibility(View.GONE);
         bubbleView.setVisibility(View.VISIBLE);
         snap();
-    }
-
-    private String modeLabel() {
-        switch (RitmState.mode) {
-            case "order": return "In order";
-            case "shuffle": return "Shuffle";
-            case "one": return "Repeat 1";
-            default: return "Loop";
-        }
     }
 
     private void refreshBubbleUi() {
@@ -751,10 +725,99 @@ public class PlayerService extends Service {
         pb.setColor(accent);
         pPlay.setBackground(pb);
         pPlay.setColorFilter(0xFF1B0F22);
-        pMode.setText(modeLabel());
-        pMode.setTextColor(accent);
+        if (RitmState.has && RitmState.count > 0) {
+            pCount.setText(RitmState.index + "/" + RitmState.count);
+            pCount.setVisibility(View.VISIBLE);
+        } else {
+            pCount.setVisibility(View.GONE);
+        }
+        pEq.setColors(accent, accent2);
+        pEq.setPlaying(RitmState.playing);
         ColorStateList cs = ColorStateList.valueOf(accent);
         pVol.setProgressTintList(cs);
         pVol.setThumbTintList(cs);
+    }
+
+    /** Small gradient square with moving bars, like the cover in the app. */
+    private static class EqView extends View {
+        private final Paint bg = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint bar = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final float density;
+        private int c1 = 0xFFFF7AD0;
+        private int c2 = 0xFF8A7CFF;
+        private boolean playing = false;
+
+        EqView(Context c) {
+            super(c);
+            density = c.getResources().getDisplayMetrics().density;
+            bar.setColor(0xFF1B0F22);
+        }
+
+        void setColors(int a, int b) {
+            if (a == c1 && b == c2) return;
+            c1 = a;
+            c2 = b;
+            bg.setShader(new LinearGradient(0, 0, getWidth(), getHeight(), c1, c2, Shader.TileMode.CLAMP));
+            invalidate();
+        }
+
+        void setPlaying(boolean p) {
+            if (p == playing) return;
+            playing = p;
+            invalidate();
+        }
+
+        @Override
+        protected void onSizeChanged(int w, int h, int ow, int oh) {
+            super.onSizeChanged(w, h, ow, oh);
+            bg.setShader(new LinearGradient(0, 0, w, h, c1, c2, Shader.TileMode.CLAMP));
+        }
+
+        @Override
+        protected void onDraw(Canvas cv) {
+            float w = getWidth();
+            float h = getHeight();
+            float r = 11f * density;
+            cv.drawRoundRect(new RectF(0, 0, w, h), r, r, bg);
+            int n = 4;
+            float gap = w * 0.07f;
+            float bw = (w * 0.56f - gap * (n - 1)) / n;
+            float x0 = w * 0.22f;
+            float base = h * 0.76f;
+            float maxH = h * 0.52f;
+            long t = SystemClock.uptimeMillis();
+            for (int i = 0; i < n; i++) {
+                float k = playing
+                        ? (0.5f + 0.5f * (float) Math.sin(t / (170.0 + i * 55.0) + i * 1.7))
+                        : 0.2f + 0.1f * (i % 2);
+                float bh = Math.max(bw, maxH * (0.25f + 0.75f * k));
+                float left = x0 + i * (bw + gap);
+                cv.drawRoundRect(new RectF(left, base - bh, left + bw, base), bw / 2f, bw / 2f, bar);
+            }
+            if (playing) postInvalidateOnAnimation();
+        }
+    }
+
+    /** The X that closes the panel, drawn a little thicker than a text glyph. */
+    private static class CloseView extends View {
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        CloseView(Context c) {
+            super(c);
+            float d = c.getResources().getDisplayMetrics().density;
+            p.setColor(0xFFFFFFFF);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(2.6f * d);
+            p.setStrokeCap(Paint.Cap.ROUND);
+        }
+
+        @Override
+        protected void onDraw(Canvas cv) {
+            float w = getWidth();
+            float h = getHeight();
+            float m = w * 0.30f;
+            cv.drawLine(m, m, w - m, h - m, p);
+            cv.drawLine(w - m, m, m, h - m, p);
+        }
     }
 }

@@ -18,7 +18,8 @@ public class MainActivity extends BridgeActivity {
      * keep running when the screen turns off or the app goes to the background.
      */
     private void keepAlive() {
-        if (!RitmState.playing) return;
+        // keep the page alive while playing, and also while paused if the bubble / notification is on
+        if (!(RitmState.playing || (RitmState.has && (RitmState.bubble || RitmState.notif)))) return;
         try {
             WebView w = getBridge().getWebView();
             if (w != null) {
