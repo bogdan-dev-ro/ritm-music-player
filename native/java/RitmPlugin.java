@@ -10,6 +10,11 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.media.AudioManager;
+import android.os.SystemClock;
+import android.util.Base64;
+import androidx.core.content.FileProvider;
+import java.io.File;
+import java.io.FileOutputStream;
 import android.provider.Settings;
 import android.webkit.WebView;
 
@@ -32,9 +37,15 @@ public class RitmPlugin extends Plugin {
     }
 
     /** Sends an action (play, pause, next, prev, stop, seek, mode, hideBubble, sleep) to the web app. */
-    static void emit(final String action, final double value) {
+    /** Returns false when the web page is gone, so the caller can restart it. */
+    static boolean emit(final String action, final double value) {
         final RitmPlugin p = instance;
-        if (p == null) return;
+        if (p == null) return false;
+        try {
+            if (p.getBridge() == null || p.getBridge().getWebView() == null) return false;
+        } catch (Exception e) {
+            return false;
+        }
         p.handler.post(new Runnable() {
             @Override
             public void run() {
@@ -53,6 +64,100 @@ public class RitmPlugin extends Plugin {
                 p.notifyListeners("action", o);
             }
         });
+        return true;
+    }
+
+    @Override
+    protected void handleOnDestroy() {
+        if (instance == this) instance = null;
+    }
+
+    /** A command the service could not deliver because the page was closed. */
+    @PluginMethod
+    public void takePending(PluginCall call) {
+        JSObject o = new JSObject();
+        o.put("action", RitmState.pendingAction == null ? "" : RitmState.pendingAction);
+        o.put("value", RitmState.pendingValue);
+        RitmState.pendingAction = null;
+        call.resolve(o);
+    }
+
+    /** Sends the app to the background again (used after a command restarted it). */
+    @PluginMethod
+    public void hideApp(PluginCall call) {
+        try {
+            if (getActivity() != null) getActivity().moveTaskToBack(true);
+        } catch (Exception ignored) {
+        }
+        call.resolve();
+    }
+
+    /** Path of a .ritm file received from another app (or empty). */
+    @PluginMethod
+    public void takePendingImport(PluginCall call) {
+        JSObject o = new JSObject();
+        if (RitmState.pendingImport != null) o.put("path", RitmState.pendingImport);
+        RitmState.pendingImport = null;
+        call.resolve(o);
+    }
+
+    private File shareFile;
+
+    @PluginMethod
+    public void shareBegin(PluginCall call) {
+        try {
+            File dir = new File(getContext().getCacheDir(), "share");
+            if (dir.exists()) {
+                File[] old = dir.listFiles();
+                if (old != null) for (File f : old) f.delete();
+            } else {
+                dir.mkdirs();
+            }
+            String name = call.getString("name", "Ritm share.ritm");
+            if (name == null) name = "Ritm share.ritm";
+            name = name.replaceAll("[^A-Za-z0-9._ -]", "_");
+            shareFile = new File(dir, name);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("share");
+        }
+    }
+
+    @PluginMethod
+    public void shareChunk(PluginCall call) {
+        try {
+            byte[] b = Base64.decode(call.getString("data", ""), Base64.DEFAULT);
+            FileOutputStream o = new FileOutputStream(shareFile, true);
+            o.write(b);
+            o.close();
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("chunk");
+        }
+    }
+
+    @PluginMethod
+    public void shareOpen(PluginCall call) {
+        try {
+            Context c = getContext();
+            Uri uri = FileProvider.getUriForFile(c, c.getPackageName() + ".ritmshare", shareFile);
+            Intent s = new Intent(Intent.ACTION_SEND);
+            s.setType("application/octet-stream");
+            s.putExtra(Intent.EXTRA_STREAM, uri);
+            s.putExtra(Intent.EXTRA_SUBJECT, shareFile.getName());
+            s.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            Intent ch = Intent.createChooser(s, call.getString("title", "Share"));
+            ch.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            if (getActivity() != null) {
+                getActivity().startActivity(ch);
+            } else {
+                ch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                c.startActivity(ch);
+            }
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("open");
+        }
     }
 
     /** True while a phone or VoIP call is ringing or active (the music must not restart then). */
@@ -93,6 +198,9 @@ public class RitmPlugin extends Plugin {
         RitmState.duration = d == null ? 0L : d.longValue();
         RitmState.position = p == null ? 0L : p.longValue();
         RitmState.hue = h == null ? 305f : h.floatValue();
+        Double vl = call.getDouble("vol", 1.0);
+        RitmState.volume = vl == null ? 1f : vl.floatValue();
+        RitmState.posAt = SystemClock.elapsedRealtime();
         Integer ix = call.getInt("index", 0);
         Integer ct = call.getInt("count", 0);
         RitmState.index = ix == null ? 0 : ix;

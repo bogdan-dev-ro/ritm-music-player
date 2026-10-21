@@ -331,6 +331,7 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border:0;border-radiu
 <div id="drop">Drop your music here</div>
 <audio id="au" preload="auto" playsinline></audio>
 <input type="file" id="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.opus,.flac" multiple hidden>
+<input type="file" id="ritmfile" hidden>
 
 <script>
 (()=>{
@@ -364,7 +365,7 @@ const IC={
   sliders:'M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6',
   sort:'M4 7h10M4 12h7M4 17h4M17 5v14M14 16l3 3 3-3',
   check:'M5 12l5 5 9-10', moon:'M20 14A8 8 0 1 1 10 4a6 6 0 0 0 10 10z',
-  upload:'M12 16V4M7 9l5-5 5 5M4 20h16', search:'M11 4a7 7 0 1 1 0 14 7 7 0 0 1 0-14zM20 20l-4-4',
+  upload:'M12 16V4M7 9l5-5 5 5M4 20h16', share:'M21 5a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM9 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM21 19a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM8.6 13.5l6.8 4M15.4 6.5l-6.8 4', search:'M11 4a7 7 0 1 1 0 14 7 7 0 0 1 0-14zM20 20l-4-4',
   addpl:'M4 6h12M4 11h12M4 16h6M17 14v6M14 17h6'
 };
 function ic(n){const d=IC[n];const s=d[0]==='!';return `<svg class="i${s?' s':''}" viewBox="0 0 24 24"><path d="${s?d.slice(1):d}"/></svg>`;}
@@ -451,7 +452,8 @@ const DEF=()=>({
 });
 const S={songs:new Map(),playlists:[],settings:DEF(),ui:{tab:'lib',pl:null,libSort:'az',q:'',plDir:1,trDir:1,sel:null}};
 const FXKEYS=['eq','bass','treble','reverb','echo','widen','pan8d','sat','lofi','comp'];
-const saveMeta=debounce(()=>{DB.put('meta',{playlists:S.playlists,settings:S.settings},'state');},350);
+function lastState(){try{return{cur:P.cur,ctx:P.ctx,plId:P.plId,pos:Math.round(au.currentTime||0)};}catch(e){return null;}}
+const saveMeta=debounce(()=>{DB.put('meta',{playlists:S.playlists,settings:S.settings,last:lastState()},'state');},350);
 
 /* ---------- audio graph ---------- */
 let ctx=null;const N={};let lastIR=0,lastSat=-1;
@@ -661,7 +663,9 @@ if('mediaSession' in navigator){
   h('seekbackward',()=>{au.currentTime=Math.max(0,au.currentTime-10);});
   h('seekforward',()=>{au.currentTime=Math.min(au.duration||0,au.currentTime+10);});
 }
-au.addEventListener('ended',()=>advance(true));
+let lastAdv=0;
+const endNext=()=>{if(Date.now()-lastAdv<2000)return;lastAdv=Date.now();advance(true);};
+au.addEventListener('ended',endNext);
 /* Keep playing when another app (a video, for example) takes the audio:
    only the app's own pause calls count as a real pause. A call still stops the music. */
 let userPause=false,resumeTries=0,resumeAt=0;
@@ -687,7 +691,12 @@ au.addEventListener('seeked',()=>syncNative(true));
 au.addEventListener('error',()=>{if(P.cur&&au.getAttribute('src')){toast('This song can\u2019t be played');if(P.ids.length>1)setTimeout(()=>advance(true),600);}});
 
 /* keep audio running with the screen off */
-setInterval(()=>{if(ctx&&!au.paused&&ctx.state!=='running')ctx.resume().catch(()=>{});},2500);
+let saveN=0;
+setInterval(()=>{
+  if(ctx&&!au.paused&&ctx.state!=='running')ctx.resume().catch(()=>{});
+  if(P.cur&&au.ended&&!userPause)endNext();            /* safety net if the 'ended' event was missed */
+  if(P.cur&&!au.paused&&(++saveN%2===0))saveMeta();     /* remember where we are, every ~5 s */
+},2500);
 document.addEventListener('visibilitychange',()=>{
   if(ctx&&!au.paused&&ctx.state!=='running')ctx.resume().catch(()=>{});
   if(!document.hidden&&NATIVE)refreshPhoneStatus();
@@ -709,9 +718,9 @@ function syncNative(force){
   const payload={
     has:!!s,title:s?s.name:'',subtitle:s?ctxName():'',playing,mode:P.mode,
     duration:Math.round((au.duration||(s&&s.dur)||0)*1000),position:Math.round((au.currentTime||0)*1000),
-    hue:s?artOf(s.name).h:305,letter:s?letterOf(s.name):'♪',...queuePos()
+    hue:s?artOf(s.name).h:305,letter:s?letterOf(s.name):'♪',...queuePos(),vol:S.settings.vol
   };
-  const key=[payload.has,payload.title,payload.subtitle,payload.playing,payload.mode,payload.hue,payload.index,payload.count].join('|');
+  const key=[payload.has,payload.title,payload.subtitle,payload.playing,payload.mode,payload.hue,payload.index,payload.count,payload.vol].join('|');
   if(!force&&key===lastNativeKey)return;
   lastNativeKey=key;
   callNative(()=>Ritm.update(payload));
@@ -727,6 +736,9 @@ function onNativeAction(a){
     case 'mode':{const o=['loop','shuffle','one','order'];setMode(o[(o.indexOf(P.mode)+1)%o.length]);break;}
     case 'hideBubble':{const m=S.settings.phone;setPhone(m==='both'?'notification':'off');toast('Bubble hidden. Bring it back in Settings');break;}
     case 'sleep':doSleep();break;
+    case 'volume':{S.settings.vol=Math.max(0,Math.min(1.5,(a.value||0)/100));soundChanged();syncSound();break;}
+    case 'repeat':{if(P.mode==='one')setMode(S.ui.prevMode&&S.ui.prevMode!=='one'?S.ui.prevMode:'loop');else{S.ui.prevMode=P.mode;setMode('one');}break;}
+    case 'import':checkPendingImport();break;
   }
 }
 let phoneStatus=null;
@@ -821,13 +833,13 @@ function updateAll(){
 function renderTop(){
   const t=$('#top'),tab=S.ui.tab;
   if(tab==='lib'&&S.ui.sel){
-    t.innerHTML=`<div class="lft"><button class="ib" id="t-cancel" aria-label="Cancel selection">${ic('close')}</button><h1 class="sm">${S.ui.sel.size} selected</h1></div><div class="rgt"><button class="ib glass" id="t-seladd" aria-label="Add to playlist">${ic('addpl')}</button><button class="ib glass" id="t-seldel" aria-label="Delete">${ic('trash')}</button></div>`;
+    t.innerHTML=`<div class="lft"><button class="ib" id="t-cancel" aria-label="Cancel selection">${ic('close')}</button><h1 class="sm">${S.ui.sel.size} selected</h1></div><div class="rgt"><button class="ib glass" id="t-seladd" aria-label="Add to playlist">${ic('addpl')}</button><button class="ib glass" id="t-selshare" aria-label="Share">${ic('share')}</button><button class="ib glass" id="t-seldel" aria-label="Delete">${ic('trash')}</button></div>`;
   }else if(tab==='pls'&&S.ui.pl){
     t.innerHTML=`<div class="lft"><button class="ib glass" id="t-back" aria-label="Back">${ic('back')}</button></div><button class="ib glass" id="t-more" aria-label="More options">${ic('more')}</button>`;
   }else if(tab==='lib'){
     t.innerHTML=`<div class="lft"><h1>Library</h1></div><button class="pill" id="t-add">${ic('plus')}Add music</button>`;
   }else if(tab==='pls'){
-    t.innerHTML=`<div class="lft"><h1>Playlists</h1></div><button class="pill" id="t-new">${ic('plus')}New</button>`;
+    t.innerHTML=`<div class="lft"><h1>Playlists</h1></div><div class="rgt"><button class="pill ghost" id="t-plshare">${ic('share')}Share</button><button class="pill" id="t-new">${ic('plus')}New</button></div>`;
   }else t.innerHTML=`<div class="lft"><h1>Settings</h1></div>`;
 }
 const curView=()=>S.ui.tab==='pls'&&S.ui.pl?'det':S.ui.tab;
@@ -1022,14 +1034,149 @@ async function deleteSongs(ids){
   }
   saveMeta();refreshCtx();
 }
+/* ---------- share & import: a .ritm file is a zip with the songs and the playlist names ---------- */
+const CRCT=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0;}return t;})();
+function crc32(u){let c=0xFFFFFFFF;for(let i=0;i<u.length;i++)c=CRCT[(c^u[i])&255]^(c>>>8);return(c^0xFFFFFFFF)>>>0;}
+const zEnc=new TextEncoder(),zDec=new TextDecoder();
+async function buildZip(files,onProg){
+  const parts=[],cd=[];let off=0,n=0;
+  for(const f of files){
+    n++;if(onProg)onProg(n,files.length);
+    const u=new Uint8Array(await f.blob.arrayBuffer()),nm=zEnc.encode(f.name),crc=crc32(u);
+    const h=new DataView(new ArrayBuffer(30));
+    h.setUint32(0,0x04034b50,true);h.setUint16(4,20,true);h.setUint16(6,0x0800,true);h.setUint16(8,0,true);h.setUint16(10,0,true);h.setUint16(12,0x21,true);
+    h.setUint32(14,crc,true);h.setUint32(18,u.length,true);h.setUint32(22,u.length,true);h.setUint16(26,nm.length,true);h.setUint16(28,0,true);
+    parts.push(h.buffer,nm,f.blob);cd.push({nm,crc,size:u.length,off});off+=30+nm.length+u.length;
+  }
+  const cdParts=[];let cdSize=0;
+  for(const e of cd){
+    const c=new DataView(new ArrayBuffer(46));
+    c.setUint32(0,0x02014b50,true);c.setUint16(4,20,true);c.setUint16(6,20,true);c.setUint16(8,0x0800,true);c.setUint16(10,0,true);c.setUint16(12,0,true);c.setUint16(14,0x21,true);
+    c.setUint32(16,e.crc,true);c.setUint32(20,e.size,true);c.setUint32(24,e.size,true);c.setUint16(28,e.nm.length,true);
+    c.setUint16(30,0,true);c.setUint16(32,0,true);c.setUint16(34,0,true);c.setUint16(36,0,true);c.setUint32(38,0,true);c.setUint32(42,e.off,true);
+    cdParts.push(c.buffer,e.nm);cdSize+=46+e.nm.length;
+  }
+  const z=new DataView(new ArrayBuffer(22));
+  z.setUint32(0,0x06054b50,true);z.setUint16(4,0,true);z.setUint16(6,0,true);z.setUint16(8,cd.length,true);z.setUint16(10,cd.length,true);
+  z.setUint32(12,cdSize,true);z.setUint32(16,off,true);z.setUint16(20,0,true);
+  return new Blob([...parts,...cdParts,z.buffer],{type:'application/octet-stream'});
+}
+async function readZip(blob){
+  const tail=new DataView(await blob.slice(Math.max(0,blob.size-70000),blob.size).arrayBuffer());
+  let p=tail.byteLength-22;while(p>=0&&tail.getUint32(p,true)!==0x06054b50)p--;
+  if(p<0)throw new Error('not a zip');
+  const cnt=tail.getUint16(p+10,true),cdSize=tail.getUint32(p+12,true),cdOff=tail.getUint32(p+16,true);
+  const cb=new DataView(await blob.slice(cdOff,cdOff+cdSize).arrayBuffer()),out={};let o=0;
+  for(let i=0;i<cnt;i++){
+    if(cb.getUint32(o,true)!==0x02014b50)throw new Error('bad zip');
+    const method=cb.getUint16(o+10,true),size=cb.getUint32(o+24,true),nl=cb.getUint16(o+28,true),xl=cb.getUint16(o+30,true),cl=cb.getUint16(o+32,true),lo=cb.getUint32(o+42,true);
+    out[zDec.decode(new Uint8Array(cb.buffer,o+46,nl))]={method,size,lo};o+=46+nl+xl+cl;
+  }
+  return out;
+}
+async function zipPart(blob,e,type){
+  const h=new DataView(await blob.slice(e.lo,e.lo+30).arrayBuffer());
+  const start=e.lo+30+h.getUint16(26,true)+h.getUint16(28,true);
+  return blob.slice(start,start+e.size,type||'');
+}
+function songExt(s){const m=/\.([a-z0-9]{2,5})$/i.exec((s.blob&&s.blob.name)||'');if(m)return m[1].toLowerCase();const t=(s.blob&&s.blob.type)||'';return t.includes('mp4')||t.includes('m4a')?'m4a':t.includes('ogg')?'ogg':t.includes('wav')?'wav':t.includes('flac')?'flac':'mp3';}
+async function shareBundle(songIds,plIds,title){
+  if(!Ritm){toast('Sharing works in the Android app');return;}
+  const ids=[...new Set(songIds)].filter(i=>S.songs.has(i));
+  if(!ids.length){toast('Nothing to share yet');return;}
+  const key=new Map(ids.map((id,i)=>[id,'s'+i]));
+  const man={v:1,app:'ritm',title:title||'Ritm share',
+    songs:ids.map(id=>{const s=S.songs.get(id);return{key:key.get(id),name:s.name,dur:s.dur||0,type:(s.blob&&s.blob.type)||'',file:'songs/'+key.get(id)+'.'+songExt(s)};}),
+    playlists:plIds.map(getPl).filter(Boolean).map(p=>({name:p.name,songs:p.ids.filter(i=>key.has(i)).map(i=>key.get(i))}))};
+  const files=man.songs.map((m,i)=>({name:m.file,blob:S.songs.get(ids[i]).blob}));
+  files.push({name:'manifest.json',blob:new Blob([JSON.stringify(man)],{type:'application/json'})});
+  try{
+    const zip=await buildZip(files,(n,t)=>toast('Preparing '+n+' of '+t+'\u2026'));
+    const fname=(title||'Ritm share').replace(/[^\w\- ]+/g,'').trim().slice(0,40)||'Ritm share';
+    await Ritm.shareBegin({name:fname+'.ritm'});
+    const CH=1<<20;
+    for(let o=0;o<zip.size;o+=CH){
+      toast('Getting it ready\u2026 '+Math.min(99,Math.round(o/zip.size*100))+'%');
+      const buf=new Uint8Array(await zip.slice(o,o+CH).arrayBuffer());
+      let bin='';for(let i=0;i<buf.length;i+=0x8000)bin+=String.fromCharCode.apply(null,buf.subarray(i,i+0x8000));
+      await Ritm.shareChunk({data:btoa(bin)});
+    }
+    await Ritm.shareOpen({title:'Share with friends'});
+    toast('Pick an app to send it with');
+  }catch(e){toast('Sharing failed. Try fewer songs at a time');}
+}
+const shareSongs=ids=>shareBundle(ids,[],ids.length===1&&S.songs.get(ids[0])?S.songs.get(ids[0]).name:'Shared songs');
+function sharePlaylists(ids){const pls=ids.map(getPl).filter(Boolean);shareBundle(pls.flatMap(p=>p.ids),ids,pls.length===1?pls[0].name:'My playlists');}
+function pickPlaylists(){
+  return new Promise(res=>{
+    ovDone=res;const sel=new Set();
+    const sh=openSheet(`<h4>Share playlists</h4><div id="pk-list">${S.playlists.map(p=>`<div class="pk" data-i="${p.id}"><div class="cb">${ic('check')}</div><div class="t">${esc(p.name)}<small style="display:block;opacity:.6">${plMeta(p)}</small></div></div>`).join('')}</div><div class="acts"><button class="pill ghost" data-x="0">Cancel</button><button class="pill" id="pk-ok" data-x="1">Share</button></div>`);
+    const okb=$('#pk-ok',sh);
+    sh.addEventListener('click',e=>{
+      const r=e.target.closest('.pk');
+      if(r){const i=r.dataset.i;sel.has(i)?sel.delete(i):sel.add(i);r.classList.toggle('sel',sel.has(i));okb.textContent=sel.size?'Share ('+sel.size+')':'Share';return;}
+      const b=e.target.closest('[data-x]');if(b)closeSheet(b.dataset.x==='1'?[...sel]:null);
+    });
+  });
+}
+async function sharePlaylistsMenu(){
+  const v=await menu('Share & import',[
+    {label:'Share some playlists\u2026',sub:'Pick the ones to send',icon:'share',v:'pick'},
+    {label:'Share all playlists',sub:plural(S.playlists.length,'playlist'),icon:'share',v:'all'},
+    {label:'Import a shared file',sub:'Open a .ritm file you received',icon:'upload',v:'imp'}]);
+  if(v==='imp'){$('#ritmfile').value='';$('#ritmfile').click();return;}
+  if(!v)return;
+  if(!S.playlists.length){toast('You have no playlists yet');return;}
+  let ids=S.playlists.map(p=>p.id);
+  if(v==='pick'){const r=await pickPlaylists();if(!r||!r.length)return;ids=r;}
+  sharePlaylists(ids);
+}
+function uniquePlName(n){let name=n,k=2;while(S.playlists.some(p=>p.name===name))name=n+' ('+(k++)+')';return name;}
+async function importBundle(blob){
+  try{
+    const z=await readZip(blob),me=z['manifest.json'];
+    if(!me||me.method!==0)throw new Error('x');
+    const man=JSON.parse(zDec.decode(new Uint8Array(await (await zipPart(blob,me)).arrayBuffer())));
+    if(!man||man.v!==1||!Array.isArray(man.songs))throw new Error('x');
+    const map={};let n=0,added=0;
+    for(const m of man.songs){
+      n++;toast('Importing '+n+' of '+man.songs.length+'\u2026');
+      const e=z[m.file];if(!e||e.method!==0)continue;
+      const dup=[...S.songs.values()].find(s=>s.name===m.name&&s.blob&&s.blob.size===e.size);
+      if(dup){map[m.key]=dup.id;continue;}
+      const f=await zipPart(blob,e,m.type||'audio/mpeg');
+      const song={id:uid(),name:m.name,dur:m.dur||await getDur(f),size:e.size,added:Date.now()+n,blob:f};
+      S.songs.set(song.id,song);await DB.put('songs',song);map[m.key]=song.id;added++;
+    }
+    let pc=0;
+    for(const p of man.playlists||[]){
+      const ids=(p.songs||[]).map(k=>map[k]).filter(Boolean);
+      if(!ids.length)continue;
+      S.playlists.push({id:uid(),name:uniquePlName(String(p.name||'Shared').slice(0,80)),ids});pc++;
+    }
+    saveMeta();refreshCtx();
+    toast('Imported '+(pc?plural(pc,'playlist')+' and ':'')+plural(added,'new song'));
+    if(pc)go('pls');else{rerender();updateAll();}
+  }catch(e){toast('That file isn\u2019t a Ritm share');}
+}
+async function checkPendingImport(){
+  if(!Ritm)return;
+  try{
+    const r=await Ritm.takePendingImport();
+    if(r&&r.path){toast('Opening the shared file\u2026');const res=await fetch(Capacitor.convertFileSrc(r.path));await importBundle(await res.blob());}
+  }catch(e){}
+}
+$('#ritmfile').addEventListener('change',e=>{const f=e.target.files&&e.target.files[0];if(f)importBundle(f);e.target.value='';});
+
 async function songMenu(id,inPl){
   const s=S.songs.get(id);if(!s)return;
   const items=[];
   if(inPl)items.push({label:'Remove from playlist',icon:'close',v:'rm'});
-  items.push({label:'Add to playlist',icon:'addpl',v:'add'},{label:'Rename',icon:'edit',v:'ren'},{label:'Delete from app',icon:'trash',v:'del',danger:true});
+  items.push({label:'Add to playlist',icon:'addpl',v:'add'},{label:'Share',icon:'share',v:'share'},{label:'Rename',icon:'edit',v:'ren'},{label:'Delete from app',icon:'trash',v:'del',danger:true});
   const v=await menu(s.name,items);
   if(v==='rm'){const p=getPl(S.ui.pl);p.ids=p.ids.filter(i=>i!==id);saveMeta();refreshCtx();renderDet();}
   else if(v==='add')addToPlaylist([id]);
+  else if(v==='share')shareSongs([id]);
   else if(v==='ren'){const n=await askText('Rename song',s.name,'Save');if(n){s.name=n;DB.put('songs',s);lastArtKey=null;rerender();updateAll();}}
   else if(v==='del'&&await confirmDlg('Delete \u201c'+s.name+'\u201d from the app?','Delete')){await deleteSongs([id]);rerender();updateAll();}
 }
@@ -1037,9 +1184,11 @@ async function plMenu(id){
   const p=getPl(id);if(!p)return;
   const v=await menu(p.name,[
     {label:'Play',icon:'play',v:'play'},
+    {label:'Share',sub:'Send it to friends',icon:'share',v:'share'},
     {label:'Rename',icon:'edit',v:'ren'},
     {label:'Delete playlist',sub:'Your songs stay in the library',icon:'trash',v:'del',danger:true}]);
   if(v==='play')playPl(id,false);
+  else if(v==='share')sharePlaylists([id]);
   else if(v==='ren'){const n=await askText('Rename playlist',p.name,'Save');if(n){p.name=n;saveMeta();rerender();updateAll();}}
   else if(v==='del'&&await confirmDlg('Delete the playlist \u201c'+p.name+'\u201d?','Delete')){
     S.playlists=S.playlists.filter(x=>x.id!==id);saveMeta();
@@ -1138,6 +1287,8 @@ $('#top').addEventListener('click',async e=>{
   else if(b.id==='t-new'){const p=await newPlaylist();if(p)go('pls',p.id);}
   else if(b.id==='t-back')go('pls');
   else if(b.id==='t-more')plMenu(S.ui.pl);
+  else if(b.id==='t-plshare')sharePlaylistsMenu();
+  else if(b.id==='t-selshare')shareSongs([...S.ui.sel]);
   else if(b.id==='t-cancel')exitSel();
   else if(b.id==='t-seladd'){if(await addToPlaylist([...S.ui.sel]))exitSel();}
   else if(b.id==='t-seldel'){
@@ -1371,7 +1522,7 @@ function syncSound(){
   });
   syncEq();
 }
-function soundChanged(){applyFxSoft();saveMeta();}
+function soundChanged(){applyFxSoft();saveMeta();syncNative();}
 function bindSound(){
   const v=$('#v-snd');
   v.addEventListener('input',e=>{
@@ -1425,23 +1576,38 @@ function icons(){
   $$('#nav button').forEach((b,i)=>{b.innerHTML=ic(tabs[i][1])+'<span>'+tabs[i][2]+'</span>';});
 }
 async function init(){
+  let restoreLast=null;
   icons();buildSound();bindSound();
   await DB.open();
   if(DB.ok){
     const songs=await DB.all('songs')||[];songs.forEach(s=>S.songs.set(s.id,s));
     const m=await DB.get('meta','state');
     if(m){
-      S.playlists=m.playlists||[];
+      S.playlists=m.playlists||[];restoreLast=m.last||null;
       const d=DEF(),st=m.settings||{};
       S.settings={...d,...st};
       FXKEYS.forEach(k=>{S.settings[k]={...d[k],...(st[k]||{})};});
     }
   }
   P.mode=S.settings.mode||'loop';
+  if(restoreLast&&S.songs.has(restoreLast.cur)){            /* open again where we stopped (no autoplay) */
+    const rl=restoreLast;
+    P.ctx=rl.ctx==='pl'&&getPl(rl.plId)?'pl':'lib';P.plId=P.ctx==='pl'?rl.plId:null;
+    P.ids=ctxIds();P.cur=rl.cur;if(P.mode==='shuffle')buildBag();
+    curUrl=URL.createObjectURL(S.songs.get(P.cur).blob);au.src=curUrl;
+    au.addEventListener('loadedmetadata',()=>{try{au.currentTime=rl.pos||0;}catch(e){}},{once:true});
+  }
   showView();renderLib();updateAll();applyRate();enter();
   if(Ritm){
     callNative(()=>Ritm.addListener('action',onNativeAction));
     syncNativeCfg();refreshPhoneStatus();
+    (async()=>{
+      try{
+        const pa=await Ritm.takePending();     /* a bubble / notification command that had to restart the app */
+        if(pa&&pa.action){setTimeout(()=>{onNativeAction(pa);setTimeout(()=>{if(!au.paused||pa.action==='pause')callNative(()=>Ritm.hideApp());},1800);},700);}
+      }catch(e){}
+      checkPendingImport();
+    })();
   }
   if(AppPlugin){
     // Android back button: close things first, then go up, and only then minimize (music keeps playing)

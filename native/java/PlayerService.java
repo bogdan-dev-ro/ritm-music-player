@@ -79,7 +79,18 @@ public class PlayerService extends Service {
     private static final int PANEL_W = 268;
     private TextView pTitle, pSub, pCount;
     private EqView pEq;
-    private SeekBar pVol;
+    private SeekBar pVol, pSeek;
+    private TextView pTimeL, pTimeR;
+    private ImageView pRep;
+    private boolean seeking = false, volDrag = false;
+    private long lastVolAt = 0;
+    private final Runnable posTick = new Runnable() {
+        @Override
+        public void run() {
+            updateSeek();
+            if (expanded && panel != null && panel.getVisibility() == View.VISIBLE) main.postDelayed(this, 500);
+        }
+    };
     private boolean expanded = false;
 
     /* ------------------------------------------------------------ entry points */
@@ -127,10 +138,10 @@ public class PlayerService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String a = intent == null ? null : intent.getAction();
         if (a != null) {
-            if (A_PREV.equals(a)) RitmPlugin.emit("prev", 0);
-            else if (A_NEXT.equals(a)) RitmPlugin.emit("next", 0);
-            else if (A_STOP.equals(a)) RitmPlugin.emit("stop", 0);
-            else if (A_TOGGLE.equals(a)) RitmPlugin.emit(RitmState.playing ? "pause" : "play", 0);
+            if (A_PREV.equals(a)) send("prev", 0);
+            else if (A_NEXT.equals(a)) send("next", 0);
+            else if (A_STOP.equals(a)) send("stop", 0);
+            else if (A_TOGGLE.equals(a)) send(RitmState.playing ? "pause" : "play", 0);
             return START_NOT_STICKY;
         }
         // Started with startForegroundService(): we must call startForeground() right away.
@@ -279,32 +290,32 @@ public class PlayerService extends Service {
             session.setCallback(new MediaSession.Callback() {
                 @Override
                 public void onPlay() {
-                    RitmPlugin.emit("play", 0);
+                    send("play", 0);
                 }
 
                 @Override
                 public void onPause() {
-                    RitmPlugin.emit("pause", 0);
+                    send("pause", 0);
                 }
 
                 @Override
                 public void onSkipToNext() {
-                    RitmPlugin.emit("next", 0);
+                    send("next", 0);
                 }
 
                 @Override
                 public void onSkipToPrevious() {
-                    RitmPlugin.emit("prev", 0);
+                    send("prev", 0);
                 }
 
                 @Override
                 public void onStop() {
-                    RitmPlugin.emit("stop", 0);
+                    send("stop", 0);
                 }
 
                 @Override
                 public void onSeekTo(long pos) {
-                    RitmPlugin.emit("seek", pos);
+                    send("seek", pos);
                 }
             });
         }
@@ -560,66 +571,126 @@ public class PlayerService extends Service {
         head.addView(close);
         panel.addView(head);
 
-        // controls: previous, play / pause, next
+        // controls: previous, play / pause, next, repeat this song
         LinearLayout ctl = new LinearLayout(this);
         ctl.setOrientation(LinearLayout.HORIZONTAL);
         ctl.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams ctlLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        ctlLp.topMargin = dp(12);
+        ctlLp.topMargin = dp(10);
         ctl.setLayoutParams(ctlLp);
-        ImageView prev = ibtn(44, 10, android.R.drawable.ic_media_previous, 16);
+        ImageView prev = ibtn(42, 9, android.R.drawable.ic_media_previous, 6);
         prev.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                RitmPlugin.emit("prev", 0);
+                send("prev", 0);
             }
         });
-        pPlay = ibtn(58, 15, android.R.drawable.ic_media_play, 16);
+        pPlay = ibtn(58, 15, android.R.drawable.ic_media_play, 6);
         pPlay.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                RitmPlugin.emit(RitmState.playing ? "pause" : "play", 0);
+                send(RitmState.playing ? "pause" : "play", 0);
             }
         });
-        ImageView next = ibtn(44, 10, android.R.drawable.ic_media_next, 16);
+        ImageView next = ibtn(42, 9, android.R.drawable.ic_media_next, 6);
         next.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                RitmPlugin.emit("next", 0);
+                send("next", 0);
+            }
+        });
+        pRep = ibtn(38, 9, getResources().getIdentifier("ic_repeat_one", "drawable", getPackageName()), 6);
+        pRep.setColorFilter(0x88FFFFFF);
+        pRep.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                send("repeat", 0);
             }
         });
         ctl.addView(prev);
         ctl.addView(pPlay);
         ctl.addView(next);
+        ctl.addView(pRep);
         panel.addView(ctl);
 
-        // volume
+        // where we are in the song: time, a bar you can drag, time left
+        LinearLayout seekRow = new LinearLayout(this);
+        seekRow.setOrientation(LinearLayout.HORIZONTAL);
+        seekRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        sLp.topMargin = dp(8);
+        seekRow.setLayoutParams(sLp);
+        pTimeL = text(11, 0xFFA79FBA, false);
+        pTimeL.setText("0:00");
+        pTimeL.setPadding(0, 0, dp(6), 0);
+        pSeek = new SeekBar(this);
+        pSeek.setMax(1000);
+        pSeek.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        pTimeR = text(11, 0xFFA79FBA, false);
+        pTimeR.setText("0:00");
+        pTimeR.setPadding(dp(6), 0, 0, 0);
+        pSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar sb, int p, boolean fromUser) {
+                if (fromUser) pTimeL.setText(fmt(RitmState.duration * p / 1000L));
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar sb) {
+                seeking = true;
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar sb) {
+                seeking = false;
+                long pos = RitmState.duration * sb.getProgress() / 1000L;
+                RitmState.position = pos;
+                RitmState.posAt = SystemClock.elapsedRealtime();
+                send("seek", pos);
+            }
+        });
+        seekRow.addView(pTimeL);
+        seekRow.addView(pSeek);
+        seekRow.addView(pTimeR);
+        panel.addView(seekRow);
+
+        // volume of the music inside the app (not the phone's volume)
         LinearLayout volRow = new LinearLayout(this);
         volRow.setOrientation(LinearLayout.HORIZONTAL);
         volRow.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams volLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        volLp.topMargin = dp(10);
+        volLp.topMargin = dp(2);
         volRow.setLayoutParams(volLp);
         TextView vl = text(12, 0xFFA79FBA, false);
         vl.setText("Volume");
         pVol = new SeekBar(this);
         pVol.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        pVol.setMax(audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
-        pVol.setProgress(audio.getStreamVolume(AudioManager.STREAM_MUSIC));
+        pVol.setMax(150);
+        pVol.setProgress(Math.round(RitmState.volume * 100));
         pVol.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
-            public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
-                if (fromUser) audio.setStreamVolume(AudioManager.STREAM_MUSIC, p, 0);
+            public void onProgressChanged(SeekBar sb, int p, boolean fromUser) {
+                if (!fromUser) return;
+                RitmState.volume = p / 100f;
+                long now = SystemClock.elapsedRealtime();
+                if (now - lastVolAt > 70) {
+                    lastVolAt = now;
+                    send("volume", p);
+                }
             }
 
             @Override
-            public void onStartTrackingTouch(SeekBar s) {
+            public void onStartTrackingTouch(SeekBar sb) {
+                volDrag = true;
             }
 
             @Override
-            public void onStopTrackingTouch(SeekBar s) {
+            public void onStopTrackingTouch(SeekBar sb) {
+                volDrag = false;
+                send("volume", sb.getProgress());
             }
         });
         volRow.addView(vl);
@@ -685,6 +756,37 @@ public class PlayerService extends Service {
         }
     }
 
+    /** Sends a command to the page; if the page was closed, starts the app to carry it out. */
+    private void send(String action, double value) {
+        if (RitmPlugin.emit(action, value)) return;
+        RitmState.pendingAction = action;
+        RitmState.pendingValue = value;
+        try {
+            Intent i = new Intent(this, MainActivity.class);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+            startActivity(i);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static String fmt(long ms) {
+        long s = Math.max(0, ms / 1000);
+        return (s / 60) + ":" + (s % 60 < 10 ? "0" : "") + (s % 60);
+    }
+
+    private void updateSeek() {
+        if (pSeek == null) return;
+        long dur = RitmState.duration;
+        long pos = RitmState.position;
+        if (RitmState.playing) pos += SystemClock.elapsedRealtime() - RitmState.posAt;
+        if (dur > 0) pos = Math.min(pos, dur);
+        if (!seeking) {
+            pSeek.setProgress(dur > 0 ? (int) (pos * 1000L / dur) : 0);
+            pTimeL.setText(fmt(pos));
+        }
+        pTimeR.setText(fmt(dur));
+    }
+
     private void expand() {
         if (root == null) return;
         expanded = true;
@@ -692,7 +794,10 @@ public class PlayerService extends Service {
         panel.setVisibility(View.VISIBLE);
         int w = getResources().getDisplayMetrics().widthPixels;
         lp.x = Math.max(dp(8), Math.min(lp.x, w - dp(PANEL_W) - dp(8)));
-        pVol.setProgress(audio.getStreamVolume(AudioManager.STREAM_MUSIC));
+        pVol.setProgress(Math.round(RitmState.volume * 100));
+        updateSeek();
+        main.removeCallbacks(posTick);
+        main.postDelayed(posTick, 500);
         try {
             wm.updateViewLayout(root, lp);
         } catch (Exception ignored) {
@@ -736,6 +841,11 @@ public class PlayerService extends Service {
         ColorStateList cs = ColorStateList.valueOf(accent);
         pVol.setProgressTintList(cs);
         pVol.setThumbTintList(cs);
+        pSeek.setProgressTintList(cs);
+        pSeek.setThumbTintList(cs);
+        if (!volDrag) pVol.setProgress(Math.round(RitmState.volume * 100));
+        pRep.setColorFilter("one".equals(RitmState.mode) ? accent : 0x88FFFFFF);
+        updateSeek();
     }
 
     /** Small gradient square with moving bars, like the cover in the app. */

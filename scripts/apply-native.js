@@ -27,8 +27,10 @@ for (const f of fs.readdirSync(path.join(root, 'native', 'java'))) {
 // 2) Drawable used by the notification and the bubble
 const drawDir = path.join(mainDir, 'res', 'drawable');
 fs.mkdirSync(drawDir, { recursive: true });
-fs.copyFileSync(path.join(root, 'native', 'res', 'drawable', 'ic_note.xml'), path.join(drawDir, 'ic_note.xml'));
-console.log('drawable  -> ic_note.xml');
+for (const f of fs.readdirSync(path.join(root, 'native', 'res', 'drawable'))) {
+  fs.copyFileSync(path.join(root, 'native', 'res', 'drawable', f), path.join(drawDir, f));
+  console.log('drawable  ->', f);
+}
 
 // 3) AndroidManifest: permissions + the foreground service
 const mfPath = path.join(mainDir, 'AndroidManifest.xml');
@@ -83,6 +85,65 @@ for (const d of fs.readdirSync(resSrc)) {
   for (const f of fs.readdirSync(from)) {
     fs.copyFileSync(path.join(from, f), path.join(to, f));
     console.log('icon      ->', d + '/' + f);
+  }
+}
+
+// 5) Receiving and sending .ritm files (FileProvider + "open with" filters)
+let mf2 = fs.readFileSync(mfPath, 'utf8');
+if (!mf2.includes('ritmshare')) {
+  const filters =
+    '            <intent-filter>\n' +
+    '                <action android:name="android.intent.action.SEND" />\n' +
+    '                <category android:name="android.intent.category.DEFAULT" />\n' +
+    '                <data android:mimeType="application/x-ritm" />\n' +
+    '                <data android:mimeType="application/octet-stream" />\n' +
+    '            </intent-filter>\n' +
+    '            <intent-filter>\n' +
+    '                <action android:name="android.intent.action.VIEW" />\n' +
+    '                <category android:name="android.intent.category.DEFAULT" />\n' +
+    '                <category android:name="android.intent.category.BROWSABLE" />\n' +
+    '                <data android:scheme="content" />\n' +
+    '                <data android:scheme="file" />\n' +
+    '                <data android:mimeType="application/x-ritm" />\n' +
+    '                <data android:mimeType="application/octet-stream" />\n' +
+    '            </intent-filter>\n';
+  mf2 = mf2.replace('</activity>', filters + '        </activity>');
+  mf2 = mf2.replace(
+    '</application>',
+    '        <provider android:name=".RitmFileProvider"' +
+      ' android:authorities="${applicationId}.ritmshare" android:exported="false"' +
+      ' android:grantUriPermissions="true">\n' +
+      '            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/ritm_share_paths" />\n' +
+      '        </provider>\n    </application>'
+  );
+  fs.writeFileSync(mfPath, mf2);
+  console.log('manifest  -> share filters + provider');
+}
+const xmlDir = path.join(mainDir, 'res', 'xml');
+fs.mkdirSync(xmlDir, { recursive: true });
+fs.writeFileSync(
+  path.join(xmlDir, 'ritm_share_paths.xml'),
+  '<?xml version="1.0" encoding="utf-8"?>\n<paths>\n    <cache-path name="ritm_share" path="share/" />\n</paths>\n'
+);
+
+// 6) Same signing key on every build (so a new APK installs over the old one) + rising version number
+const gradlePath = path.join(root, 'android', 'app', 'build.gradle');
+if (fs.existsSync(gradlePath)) {
+  let g = fs.readFileSync(gradlePath, 'utf8');
+  if (!g.includes('ritmSigning')) {
+    const run = process.env.GITHUB_RUN_NUMBER || '1';
+    g = g.replace(/versionCode\s+\d+/, 'versionCode ' + run).replace(/versionName\s+"[^"]*"/, 'versionName "1.0.' + run + '"');
+    const ks = path.join(root, 'signing', 'ritm.p12').replace(/\\/g, '/');
+    if (fs.existsSync(ks) && /android\s*\{/.test(g) && /buildTypes\s*\{/.test(g)) {
+      const sc =
+        "\n    signingConfigs {\n        ritmSigning {\n            storeFile file('" + ks + "')\n" +
+        "            storePassword 'ritm-app'\n            keyAlias 'ritm'\n            keyPassword 'ritm-app'\n" +
+        "            storeType 'pkcs12'\n        }\n    }\n";
+      g = g.replace(/android\s*\{/, (m) => m + sc);
+      g = g.replace(/buildTypes\s*\{/, (m) => m + "\n        debug {\n            signingConfig signingConfigs.ritmSigning\n        }\n");
+      console.log('gradle    -> signed with signing/ritm.p12, version', run);
+    }
+    fs.writeFileSync(gradlePath, g);
   }
 }
 console.log('Done.');

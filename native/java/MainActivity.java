@@ -1,9 +1,15 @@
 package com.ritm.app;
 
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.webkit.WebView;
 
 import com.getcapacitor.BridgeActivity;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
 
 public class MainActivity extends BridgeActivity {
 
@@ -11,6 +17,49 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(RitmPlugin.class);
         super.onCreate(savedInstanceState);
+        handleShare(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleShare(intent);
+    }
+
+    /** A .ritm file opened with Ritm or shared to it: copy it aside, the page imports it. */
+    private void handleShare(Intent in) {
+        if (in == null) return;
+        String act = in.getAction();
+        Uri uri = null;
+        if (Intent.ACTION_VIEW.equals(act)) {
+            uri = in.getData();
+        } else if (Intent.ACTION_SEND.equals(act)) {
+            uri = in.getParcelableExtra(Intent.EXTRA_STREAM);
+        }
+        if (uri == null) return;
+        final Uri u = uri;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    InputStream is = getContentResolver().openInputStream(u);
+                    if (is == null) return;
+                    File dir = new File(getCacheDir(), "import");
+                    dir.mkdirs();
+                    File out = new File(dir, "in.ritm");
+                    FileOutputStream os = new FileOutputStream(out);
+                    byte[] buf = new byte[1 << 16];
+                    int n;
+                    while ((n = is.read(buf)) > 0) os.write(buf, 0, n);
+                    os.close();
+                    is.close();
+                    RitmState.pendingImport = out.getAbsolutePath();
+                    RitmPlugin.emit("import", 0);
+                } catch (Exception ignored) {
+                }
+            }
+        }).start();
     }
 
     /**
