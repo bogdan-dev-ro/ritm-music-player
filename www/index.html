@@ -460,14 +460,14 @@ let ctx=null;const N={};let lastIR=0,lastSat=-1;
 function initAudio(){
   if(ctx)return true;
   const AC=window.AudioContext||window.webkitAudioContext;if(!AC)return false;
-  try{ctx=new AC();}catch(e){return false;}
+  try{ctx=new AC({latencyHint:'playback'});}catch(e){try{ctx=new AC();}catch(e2){return false;}}
   ctx.onstatechange=()=>{if(ctx.state!=='running'&&!au.paused)ctx.resume().catch(()=>{});};
   const g=()=>ctx.createGain(),bq=(t,f)=>{const b=ctx.createBiquadFilter();b.type=t;b.frequency.value=f;return b;};
   N.src=ctx.createMediaElementSource(au);
   N.pre=g();
   N.eq=EQF.map((f,i)=>{const b=bq(i===0?'lowshelf':i===9?'highshelf':'peaking',f);b.Q.value=1.1;b.gain.value=0;return b;});
   N.bass=bq('lowshelf',90);N.treble=bq('highshelf',7000);
-  N.satIn=g();N.satDry=g();N.satWet=g();N.satOut=g();N.shaper=ctx.createWaveShaper();N.shaper.oversample='4x';N.satWet.gain.value=0;
+  N.satIn=g();N.satDry=g();N.satWet=g();N.satOut=g();N.shaper=ctx.createWaveShaper();N.shaper.oversample='none';N.satWet.gain.value=0;
   N.hp=bq('highpass',10);N.lp=bq('lowpass',22000);
   N.split=ctx.createChannelSplitter(2);N.merge=ctx.createChannelMerger(2);
   N.midL=g();N.midR=g();N.midS=g();N.sideL=g();N.sideR=g();N.sideS=g();N.wid=g();N.inv=g();
@@ -523,7 +523,7 @@ function applyFx(force){
   ramp(N.bass.gain,on('bass')?s.bass.gain:0);
   ramp(N.treble.gain,on('treble')?s.treble.gain:0);
   const so=on('sat');
-  ramp(N.satWet.gain,so?.7:0);ramp(N.satDry.gain,so?.3:1);
+  ramp(N.satWet.gain,so?.7:0);ramp(N.satDry.gain,so?.3:1);N.shaper.oversample=so?'2x':'none';
   if(so&&(force||lastSat!==s.sat.drive)){N.shaper.curve=satCurve(s.sat.drive);lastSat=s.sat.drive;}
   ramp(N.hp.frequency,on('lofi')?260:10);ramp(N.lp.frequency,on('lofi')?s.lofi.cut:22000);
   ramp(N.wid.gain,on('widen')?s.widen.width:1);
@@ -724,6 +724,31 @@ function syncNative(force){
   if(!force&&key===lastNativeKey)return;
   lastNativeKey=key;
   callNative(()=>Ritm.update(payload));
+}
+let lastDoneId=0;
+/* every command from the bubble / notification has a number; we confirm it so the service knows we are alive */
+function onNativeEvent(a){
+  if(a&&a.id){
+    if(a.id<=lastDoneId){callNative(()=>Ritm.ack({id:a.id}));return;}
+    lastDoneId=a.id;
+  }
+  try{onNativeAction(a);}catch(e){}
+  if(a&&a.id)callNative(()=>Ritm.ack({id:a.id}));
+}
+/* a command that could not be delivered because the app was closed or frozen: run it, then go back to the background */
+async function runPending(){
+  if(!Ritm)return;
+  try{
+    const pa=await Ritm.takePending();
+    if(!pa||!pa.action)return;
+    if(pa.id&&pa.id<=lastDoneId){callNative(()=>Ritm.ack({id:pa.id}));return;}
+    if(pa.id)lastDoneId=pa.id;
+    setTimeout(()=>{
+      onNativeAction(pa);
+      if(pa.id)callNative(()=>Ritm.ack({id:pa.id}));
+      setTimeout(()=>{if(!au.paused||pa.action==='pause')callNative(()=>Ritm.hideApp());},1800);
+    },400);
+  }catch(e){}
 }
 function onNativeAction(a){
   switch(a.action){
@@ -1599,15 +1624,10 @@ async function init(){
   }
   showView();renderLib();updateAll();applyRate();enter();
   if(Ritm){
-    callNative(()=>Ritm.addListener('action',onNativeAction));
+    callNative(()=>Ritm.addListener('action',onNativeEvent));
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden)runPending();});
     syncNativeCfg();refreshPhoneStatus();
-    (async()=>{
-      try{
-        const pa=await Ritm.takePending();     /* a bubble / notification command that had to restart the app */
-        if(pa&&pa.action){setTimeout(()=>{onNativeAction(pa);setTimeout(()=>{if(!au.paused||pa.action==='pause')callNative(()=>Ritm.hideApp());},1800);},700);}
-      }catch(e){}
-      checkPendingImport();
-    })();
+    runPending();checkPendingImport();
   }
   if(AppPlugin){
     // Android back button: close things first, then go up, and only then minimize (music keeps playing)

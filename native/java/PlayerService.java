@@ -756,14 +756,42 @@ public class PlayerService extends Service {
         }
     }
 
-    /** Sends a command to the page; if the page was closed, starts the app to carry it out. */
-    private void send(String action, double value) {
-        if (RitmPlugin.emit(action, value)) return;
+    /**
+     * Sends a command to the page and waits for it to confirm. If the page does not answer (it was
+     * frozen, or Android closed it), the app is brought back, and as a last resort restarted.
+     */
+    private void send(final String action, final double value) {
+        final int id = RitmPlugin.emit(action, value);
+        if (id < 0) {
+            launchApp(action, value, 0, false);
+            return;
+        }
+        if ("volume".equals(action) || "seek".equals(action)) return;
+        main.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (RitmState.ackId >= id) return;
+                launchApp(action, value, id, false);
+                main.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (RitmState.ackId < id) launchApp(action, value, id, true);
+                    }
+                }, 3500);
+            }
+        }, 1500);
+    }
+
+    private void launchApp(String action, double value, int id, boolean fresh) {
         RitmState.pendingAction = action;
         RitmState.pendingValue = value;
+        RitmState.pendingId = id;
+        RitmState.pendingAt = SystemClock.elapsedRealtime();
         try {
             Intent i = new Intent(this, MainActivity.class);
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+            int fl = Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION;
+            fl |= fresh ? Intent.FLAG_ACTIVITY_CLEAR_TASK : Intent.FLAG_ACTIVITY_REORDER_TO_FRONT;
+            i.addFlags(fl);
             startActivity(i);
         } catch (Exception ignored) {
         }

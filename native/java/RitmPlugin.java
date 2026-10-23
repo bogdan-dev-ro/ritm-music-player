@@ -38,14 +38,18 @@ public class RitmPlugin extends Plugin {
 
     /** Sends an action (play, pause, next, prev, stop, seek, mode, hideBubble, sleep) to the web app. */
     /** Returns false when the web page is gone, so the caller can restart it. */
-    static boolean emit(final String action, final double value) {
+    private static int seq = 0;
+
+    /** Sends a command to the page. Returns its number, or -1 when the page is gone. */
+    static synchronized int emit(final String action, final double value) {
         final RitmPlugin p = instance;
-        if (p == null) return false;
+        if (p == null) return -1;
         try {
-            if (p.getBridge() == null || p.getBridge().getWebView() == null) return false;
+            if (p.getBridge() == null || p.getBridge().getWebView() == null) return -1;
         } catch (Exception e) {
-            return false;
+            return -1;
         }
+        final int id = ++seq;
         p.handler.post(new Runnable() {
             @Override
             public void run() {
@@ -61,10 +65,19 @@ public class RitmPlugin extends Plugin {
                 JSObject o = new JSObject();
                 o.put("action", action);
                 o.put("value", value);
+                o.put("id", id);
                 p.notifyListeners("action", o);
             }
         });
-        return true;
+        return id;
+    }
+
+    /** The page confirms it received command number 'id'. */
+    @PluginMethod
+    public void ack(PluginCall call) {
+        Integer id = call.getInt("id", 0);
+        if (id != null && id > RitmState.ackId) RitmState.ackId = id;
+        call.resolve();
     }
 
     @Override
@@ -76,8 +89,11 @@ public class RitmPlugin extends Plugin {
     @PluginMethod
     public void takePending(PluginCall call) {
         JSObject o = new JSObject();
-        o.put("action", RitmState.pendingAction == null ? "" : RitmState.pendingAction);
+        boolean fresh = RitmState.pendingAction != null
+                && SystemClock.elapsedRealtime() - RitmState.pendingAt < 20000;
+        o.put("action", fresh ? RitmState.pendingAction : "");
         o.put("value", RitmState.pendingValue);
+        o.put("id", RitmState.pendingId);
         RitmState.pendingAction = null;
         call.resolve(o);
     }
