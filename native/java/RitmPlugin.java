@@ -50,6 +50,17 @@ public class RitmPlugin extends Plugin {
             return -1;
         }
         final int id = ++seq;
+        postEvent(p, action, value, id);
+        return id;
+    }
+
+    /** Sends the same command again with the same number (the page ignores it if it already did it). */
+    static void reemit(String action, double value, int id) {
+        RitmPlugin p = instance;
+        if (p != null) postEvent(p, action, value, id);
+    }
+
+    private static void postEvent(final RitmPlugin p, final String action, final double value, final int id) {
         p.handler.post(new Runnable() {
             @Override
             public void run() {
@@ -69,7 +80,20 @@ public class RitmPlugin extends Plugin {
                 p.notifyListeners("action", o);
             }
         });
-        return id;
+    }
+
+    /** A line from the page for the connection log. */
+    @PluginMethod
+    public void note(PluginCall call) {
+        RitmState.log("page: " + call.getString("msg", ""));
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void getLog(PluginCall call) {
+        JSObject o = new JSObject();
+        o.put("text", RitmState.dump());
+        call.resolve(o);
     }
 
     /** The page confirms it received command number 'id'. */

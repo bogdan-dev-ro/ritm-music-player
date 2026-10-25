@@ -2,6 +2,7 @@ package com.ritm.app;
 
 import android.content.Intent;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.webkit.WebView;
 
@@ -17,7 +18,28 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(RitmPlugin.class);
         super.onCreate(savedInstanceState);
+        keepRendererImportant();
         handleShare(getIntent());
+    }
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        keepRendererImportant();
+    }
+
+    /**
+     * The page runs in its own Android process. When the app is not on screen that process is normally
+     * demoted and, after a while, frozen: commands from the bubble or the notification then reach nobody.
+     * This keeps it at the same priority as the app (which has a foreground service).
+     */
+    private void keepRendererImportant() {
+        try {
+            if (Build.VERSION.SDK_INT >= 26 && getBridge() != null && getBridge().getWebView() != null) {
+                getBridge().getWebView().setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false);
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     @Override

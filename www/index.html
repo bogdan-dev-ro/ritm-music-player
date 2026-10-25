@@ -725,6 +725,7 @@ function syncNative(force){
   lastNativeKey=key;
   callNative(()=>Ritm.update(payload));
 }
+const note=m=>{if(Ritm)callNative(()=>Ritm.note({msg:m}));};
 let lastDoneId=0;
 /* every command from the bubble / notification has a number; we confirm it so the service knows we are alive */
 function onNativeEvent(a){
@@ -732,8 +733,10 @@ function onNativeEvent(a){
     if(a.id<=lastDoneId){callNative(()=>Ritm.ack({id:a.id}));return;}
     lastDoneId=a.id;
   }
-  try{onNativeAction(a);}catch(e){}
+  note('got '+a.action+' #'+(a.id||0)+', screen='+document.visibilityState+', sound='+(typeof ctx!=='undefined'&&ctx?ctx.state:'-'));
+  try{onNativeAction(a);}catch(e){note('error: '+e.message);}
   if(a&&a.id)callNative(()=>Ritm.ack({id:a.id}));
+  if(a&&(a.action==='play'||a.action==='next'||a.action==='prev'))setTimeout(()=>note('after '+a.action+': '+(au.paused?'still paused':'playing')),900);
 }
 /* a command that could not be delivered because the app was closed or frozen: run it, then go back to the background */
 async function runPending(){
@@ -1148,8 +1151,16 @@ async function sharePlaylistsMenu(){
   const v=await menu('Share & import',[
     {label:'Share some playlists\u2026',sub:'Pick the ones to send',icon:'share',v:'pick'},
     {label:'Share all playlists',sub:plural(S.playlists.length,'playlist'),icon:'share',v:'all'},
-    {label:'Import a shared file',sub:'Open a .ritm file you received',icon:'upload',v:'imp'}]);
+    {label:'Import a shared file',sub:'Open a .ritm file you received',icon:'upload',v:'imp'},
+    {label:'Connection log',sub:'Shows what the bubble and notification did',icon:'share',v:'log'}]);
   if(v==='imp'){$('#ritmfile').value='';$('#ritmfile').click();return;}
+  if(v==='log'){
+    let t='';try{t=(await Ritm.getLog()).text||'';}catch(e){}
+    ovDone=()=>{};
+    const sh=openSheet('<h4>Connection log</h4><pre style="white-space:pre-wrap;font-size:11px;line-height:1.4;max-height:55vh;overflow:auto;margin:8px 0">'+esc(t||'(nothing yet)')+'</pre><div class="acts"><button class="pill" data-x="1">Close</button></div>');
+    sh.addEventListener('click',e=>{if(e.target.closest('[data-x]'))closeSheet();});
+    return;
+  }
   if(!v)return;
   if(!S.playlists.length){toast('You have no playlists yet');return;}
   let ids=S.playlists.map(p=>p.id);
@@ -1602,6 +1613,7 @@ function icons(){
 }
 async function init(){
   let restoreLast=null;
+  setTimeout(()=>note('page started'),1500);
   icons();buildSound();bindSound();
   await DB.open();
   if(DB.ok){

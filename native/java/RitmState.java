@@ -16,6 +16,19 @@ final class RitmState {
     static volatile int count = 0;             // songs in the list
     static volatile float volume = 1f;         // the app's own volume (0 - 1.5), not the phone's
     static volatile long posAt = 0;            // when 'position' was received (elapsedRealtime)
+    private static final java.util.ArrayDeque<String> LOG = new java.util.ArrayDeque<String>();
+
+    static synchronized void log(String s) {
+        LOG.addLast(new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(new java.util.Date()) + "  " + s);
+        while (LOG.size() > 60) LOG.removeFirst();
+    }
+
+    static synchronized String dump() {
+        StringBuilder b = new StringBuilder();
+        for (String l : LOG) b.append(l).append('\n');
+        return b.toString();
+    }
+
     static volatile int ackId = 0;             // last command the page confirmed
     static volatile int pendingId = 0;
     static volatile long pendingAt = 0;

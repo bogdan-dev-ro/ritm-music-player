@@ -757,11 +757,12 @@ public class PlayerService extends Service {
     }
 
     /**
-     * Sends a command to the page and waits for it to confirm. If the page does not answer (it was
-     * frozen, or Android closed it), the app is brought back, and as a last resort restarted.
+     * Sends a command to the page and waits for it to confirm. If the page is slow, the command is sent
+     * again (the page ignores a repeat). Only if it still does not answer is the app brought to the front.
      */
     private void send(final String action, final double value) {
         final int id = RitmPlugin.emit(action, value);
+        RitmState.log("send " + action + " #" + id + (id < 0 ? " (the page is gone)" : ""));
         if (id < 0) {
             launchApp(action, value, 0, false);
             return;
@@ -770,14 +771,23 @@ public class PlayerService extends Service {
         main.postDelayed(new Runnable() {
             @Override
             public void run() {
-                if (RitmState.ackId >= id) return;
-                launchApp(action, value, id, false);
+                if (RitmState.ackId >= id) {
+                    RitmState.log("ok #" + id);
+                    return;
+                }
+                RitmState.log("no answer to #" + id + ", sending again");
+                RitmPlugin.reemit(action, value, id);
                 main.postDelayed(new Runnable() {
                     @Override
                     public void run() {
-                        if (RitmState.ackId < id) launchApp(action, value, id, true);
+                        if (RitmState.ackId >= id) {
+                            RitmState.log("ok #" + id + " (late)");
+                            return;
+                        }
+                        RitmState.log("still no answer to #" + id + ", opening the app");
+                        launchApp(action, value, id, false);
                     }
-                }, 3500);
+                }, 4000);
             }
         }, 1500);
     }
