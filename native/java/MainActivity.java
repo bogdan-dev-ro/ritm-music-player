@@ -38,6 +38,8 @@ public class MainActivity extends BridgeActivity {
             if (Build.VERSION.SDK_INT >= 26 && getBridge() != null && getBridge().getWebView() != null) {
                 getBridge().getWebView().setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false);
             }
+            // sound may start from the bubble or the notification without a touch on the page
+            getBridge().getWebView().getSettings().setMediaPlaybackRequiresUserGesture(false);
         } catch (Exception ignored) {
         }
     }

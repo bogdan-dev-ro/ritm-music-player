@@ -571,8 +571,8 @@ async function playSong(id){
   if(curUrl)URL.revokeObjectURL(curUrl);
   curUrl=URL.createObjectURL(s.blob);
   P.cur=id;au.src=curUrl;applyRate();
-  try{await au.play();}catch(e){}
-  if(au.paused)setTimeout(()=>{if(P.cur===id&&au.paused)au.play().catch(()=>{});},500);
+  await tryPlay('start');
+  if(au.paused)setTimeout(()=>{if(P.cur===id&&au.paused)tryPlay('retry');},500);
   setMedia();updateAll();
 }
 function nextShuffleId(){
@@ -588,7 +588,7 @@ function nextShuffleId(){
 function advance(auto){
   P.ids=ctxIds();
   if(!P.ids.length)return;
-  if(auto&&P.mode==='one'){au.currentTime=0;au.play().catch(()=>{});return;}
+  if(auto&&P.mode==='one'){au.currentTime=0;tryPlay('repeat');return;}
   let id;
   if(P.mode==='shuffle')id=nextShuffleId();
   else{
@@ -610,9 +610,29 @@ function previous(){
   else{let i=P.ids.indexOf(P.cur)-1;if(i<0)i=P.ids.length-1;id=P.ids[i];}
   if(id)playSong(id);
 }
+/* start the sound and say why if the system refuses (the log shows it) */
+let tapRetry=false;
+function armTapRetry(){
+  if(tapRetry)return;tapRetry=true;
+  toast('Tap the screen once to allow playback');
+  document.addEventListener('pointerdown',()=>{tapRetry=false;if(au.paused&&P.cur)tryPlay('after tap');},{once:true,capture:true});
+}
+async function tryPlay(why){
+  try{
+    initAudio();
+    if(ctx&&ctx.state!=='running'){try{await ctx.resume();}catch(e){note('sound engine refused to start ('+e.name+')');}}
+    await au.play();
+    note((why||'play')+': playing, sound engine='+(ctx?ctx.state:'none'));
+    return true;
+  }catch(e){
+    note((why||'play')+' refused: '+e.name);
+    if(e&&e.name==='NotAllowedError')armTapRetry();
+    return false;
+  }
+}
 function togglePlay(){
   if(!P.cur){const ids=libIds();if(ids.length)startPlay('lib',null,P.mode==='shuffle'?ids[Math.random()*ids.length|0]:ids[0]);return;}
-  if(au.paused){initAudio();if(ctx&&ctx.state==='suspended')ctx.resume();au.play().catch(()=>{});}else au.pause();
+  if(au.paused){tryPlay('play');}else au.pause();
 }
 function setMode(m){
   P.mode=m;S.settings.mode=m;
@@ -682,7 +702,7 @@ au.addEventListener('pause',()=>{
     if(!au.paused||userPause)return;
     let inCall=false;
     try{if(Ritm)inCall=!!(await Ritm.callActive()).active;}catch(e){}
-    if(!inCall)au.play().catch(()=>{});
+    if(!inCall)tryPlay('resume');
   },400);
 });
 au.addEventListener('play',updateAll);au.addEventListener('pause',updateAll);
@@ -693,7 +713,7 @@ au.addEventListener('error',()=>{if(P.cur&&au.getAttribute('src')){toast('This s
 /* keep audio running with the screen off */
 let saveN=0;
 setInterval(()=>{
-  if(ctx&&!au.paused&&ctx.state!=='running')ctx.resume().catch(()=>{});
+  if(ctx&&!au.paused&&ctx.state!=='running')ctx.resume().catch(e=>note('sound engine still stopped ('+e.name+')'));
   if(P.cur&&au.ended&&!userPause)endNext();            /* safety net if the 'ended' event was missed */
   if(P.cur&&!au.paused&&(++saveN%2===0))saveMeta();     /* remember where we are, every ~5 s */
 },2500);
