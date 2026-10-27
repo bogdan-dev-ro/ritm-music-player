@@ -34,7 +34,7 @@ public class MainActivity extends BridgeActivity {
     }
 
     @Override
-    protected void onDestroy() {
+    public void onDestroy() {
         RitmState.log("app screen closed" + (isFinishing() ? " (finished)" : " (by Android)"));
         super.onDestroy();
     }
