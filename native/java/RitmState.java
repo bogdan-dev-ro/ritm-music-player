@@ -16,17 +16,44 @@ final class RitmState {
     static volatile int count = 0;             // songs in the list
     static volatile float volume = 1f;         // the app's own volume (0 - 1.5), not the phone's
     static volatile long posAt = 0;            // when 'position' was received (elapsedRealtime)
-    private static final java.util.ArrayDeque<String> LOG = new java.util.ArrayDeque<String>();
+    private static java.io.File logFile = null;
 
+    static synchronized void init(android.content.Context c) {
+        if (logFile == null) logFile = new java.io.File(c.getApplicationContext().getFilesDir(), "ritm-log.txt");
+    }
+
+    /** Adds a line to the connection log. It is kept in a file, so it survives the app being closed. */
     static synchronized void log(String s) {
-        LOG.addLast(new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(new java.util.Date()) + "  " + s);
-        while (LOG.size() > 60) LOG.removeFirst();
+        if (logFile == null) return;
+        String line = new java.text.SimpleDateFormat("dd HH:mm:ss", java.util.Locale.US).format(new java.util.Date()) + "  " + s + "\n";
+        try {
+            if (logFile.length() > 20000) {
+                String old = dump();
+                int cut = old.indexOf('\n', old.length() / 2);
+                java.io.FileWriter w = new java.io.FileWriter(logFile, false);
+                w.write(cut >= 0 ? old.substring(cut + 1) : "");
+                w.close();
+            }
+            java.io.FileWriter w = new java.io.FileWriter(logFile, true);
+            w.write(line);
+            w.close();
+        } catch (Exception ignored) {
+        }
     }
 
     static synchronized String dump() {
-        StringBuilder b = new StringBuilder();
-        for (String l : LOG) b.append(l).append('\n');
-        return b.toString();
+        if (logFile == null || !logFile.exists()) return "";
+        try {
+            java.io.FileInputStream in = new java.io.FileInputStream(logFile);
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            in.close();
+            return out.toString("UTF-8");
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     static volatile int ackId = 0;             // last command the page confirmed

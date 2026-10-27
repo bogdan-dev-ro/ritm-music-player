@@ -1,25 +1,97 @@
 package com.ritm.app;
 
+import android.app.ActivityManager;
+import android.app.ApplicationExitInfo;
+import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebView;
 
 import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.BridgeWebViewClient;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.util.List;
 
 public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        RitmState.init(getApplicationContext());
+        RitmState.log("app opened");
         registerPlugin(RitmPlugin.class);
         super.onCreate(savedInstanceState);
+        installSafetyNet();
+        logEarlierExits();
         keepRendererImportant();
         handleShare(getIntent());
+    }
+
+    @Override
+    protected void onDestroy() {
+        RitmState.log("app screen closed" + (isFinishing() ? " (finished)" : " (by Android)"));
+        super.onDestroy();
+    }
+
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        if (level >= 10) RitmState.log("the phone is low on memory (level " + level + ")");
+    }
+
+    /**
+     * When Android kills the page's process (usually because the phone is low on memory), the default is
+     * to kill the whole app, with the music, the bubble and the notification. Instead, start a new page.
+     */
+    private void installSafetyNet() {
+        try {
+            getBridge().setWebViewClient(new BridgeWebViewClient(getBridge()) {
+                @Override
+                public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                    RitmState.log("the page's process died (" + (detail.didCrash() ? "crash" : "killed by Android") + ")");
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            recreate();
+                        }
+                    });
+                    return true;
+                }
+            });
+        } catch (Throwable t) {
+            RitmState.log("safety net not installed: " + t);
+        }
+    }
+
+    /** Writes into the log why the app was closed the last times (Android 11 and newer). */
+    private void logEarlierExits() {
+        if (Build.VERSION.SDK_INT < 30) return;
+        try {
+            ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            List<ApplicationExitInfo> list = am.getHistoricalProcessExitReasons(getPackageName(), 0, 6);
+            SharedPreferences sp = getSharedPreferences("ritm", Context.MODE_PRIVATE);
+            long seen = sp.getLong("exitSeen", 0);
+            long max = seen;
+            String[] names = {"?", "by itself", "signal", "LOW MEMORY", "crash", "native crash", "not responding",
+                    "init failed", "permission change", "too many resources", "user request", "user stopped",
+                    "dependency died", "other", "FROZEN", "package state", "package updated"};
+            for (ApplicationExitInfo e : list) {
+                if (e.getTimestamp() <= seen) continue;
+                int r = e.getReason();
+                String when = new java.text.SimpleDateFormat("dd HH:mm", java.util.Locale.US).format(new java.util.Date(e.getTimestamp()));
+                RitmState.log("earlier, at " + when + ", Android closed the app: " + (r >= 0 && r < names.length ? names[r] : "code " + r)
+                        + (e.getDescription() == null ? "" : " (" + e.getDescription() + ")"));
+                if (e.getTimestamp() > max) max = e.getTimestamp();
+            }
+            sp.edit().putLong("exitSeen", max).apply();
+        } catch (Exception ignored) {
+        }
     }
 
     @Override

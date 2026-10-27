@@ -119,6 +119,8 @@ public class PlayerService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        RitmState.init(getApplicationContext());
+        RitmState.log("service started");
         instance = this;
         nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         audio = (AudioManager) getSystemService(AUDIO_SERVICE);
@@ -153,6 +155,7 @@ public class PlayerService extends Service {
 
     @Override
     public void onTaskRemoved(Intent rootIntent) {
+        RitmState.log("app swiped away from recents");
         // The app was swiped away from recents: the web page (and its audio) is gone too.
         RitmState.playing = false;
         RitmState.has = false;
@@ -162,6 +165,7 @@ public class PlayerService extends Service {
 
     @Override
     public void onDestroy() {
+        RitmState.log("service stopped");
         hideBubble();
         releaseWake();
         if (session != null) {
